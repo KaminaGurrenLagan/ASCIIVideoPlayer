@@ -43,7 +43,7 @@ namespace ASCIIVideoPlayer
         private const double AspectRatio = 2.2;
         private const int MinWidth = 80;
 
-        private static bool colorMode = true;
+        private static int colorMode = 1;
         private static bool isVideo = true;
 
         static void Main(string[] args)
@@ -56,20 +56,24 @@ namespace ASCIIVideoPlayer
             Console.WriteLine("\nВыберите режим:");
             Console.WriteLine("1 - Видео (цветное)");
             Console.WriteLine("2 - Видео (серое)");
-            Console.WriteLine("3 - Фото (цветное)");
-            Console.WriteLine("4 - Фото (серое)");
+            Console.WriteLine("3 - Видео (цветное улучшенное)");
+            Console.WriteLine("4 - Фото (цветное)");
+            Console.WriteLine("5 - Фото (серое)");
+            Console.WriteLine("6 - Фото (цветное улучшенное)");
             Console.Write("\nВаш выбор: ");
 
             string choice = Console.ReadLine();
             switch (choice)
             {
-                case "1": colorMode = true; isVideo = true; break;
-                case "2": colorMode = false; isVideo = true; break;
-                case "3": colorMode = true; isVideo = false; break;
-                case "4": colorMode = false; isVideo = false; break;
+                case "1": colorMode = 1; isVideo = true; break;
+                case "2": colorMode = 0; isVideo = true; break;
+                case "3": colorMode = 2; isVideo = true; break;
+                case "4": colorMode = 1; isVideo = false; break;
+                case "5": colorMode = 0; isVideo = false; break;
+                case "6": colorMode = 2; isVideo = false; break;
                 default:
                     Console.WriteLine("Неверный выбор, используется режим: Видео (цветное)");
-                    colorMode = true; isVideo = true;
+                    colorMode = 1; isVideo = true;
                     break;
             }
 
@@ -104,13 +108,16 @@ namespace ASCIIVideoPlayer
                     int targetH = (int)(consoleH / AspectRatio);
 
                     Console.WriteLine($"Изображение: {img.Width}x{img.Height}");
-                    Console.WriteLine($"Режим: {(colorMode ? "Цветной" : "Серый")}");
+                    Console.WriteLine($"Режим: {(colorMode == 0 ? "Серый" : colorMode == 1 ? "Цветной" : "Цветной улучшенный")}");
                     Console.WriteLine("Нажмите любую клавишу для отображения. ESC для выхода.\n");
                     Console.ReadKey(true);
                     Console.Clear();
 
-                    CHAR_INFO[] buffer = ConvertToBuffer(img, targetW, targetH, consoleW, consoleH);
-                    WriteBuffer(buffer, consoleW, consoleH);
+                    using (Bitmap enhanced = EnhanceImage(img))
+                    {
+                        CHAR_INFO[] buffer = ConvertToBuffer(enhanced, targetW, targetH, consoleW, consoleH);
+                        WriteBuffer(buffer, consoleW, consoleH);
+                    }
 
                     Console.WriteLine("\n\nНажмите ESC для выхода...");
                     while (Console.ReadKey(true).Key != ConsoleKey.Escape) { }
@@ -127,6 +134,33 @@ namespace ASCIIVideoPlayer
             }
         }
 
+        static Bitmap EnhanceImage(Bitmap original)
+        {
+            Bitmap enhanced = new Bitmap(original.Width, original.Height);
+
+            using (Graphics g = Graphics.FromImage(enhanced))
+            {
+                ImageAttributes attr = new ImageAttributes();
+
+                ColorMatrix matrix = new ColorMatrix(new float[][]
+                {
+                    new float[] {1.15f, 0, 0, 0, 0},
+                    new float[] {0, 1.15f, 0, 0, 0},
+                    new float[] {0, 0, 1.15f, 0, 0},
+                    new float[] {0, 0, 0, 1, 0},
+                    new float[] {0.05f, 0.05f, 0.05f, 0, 1}
+                });
+
+                attr.SetColorMatrix(matrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
+                attr.SetGamma(0.85f, ColorAdjustType.Bitmap);
+
+                g.DrawImage(original, new Rectangle(0, 0, original.Width, original.Height),
+                    0, 0, original.Width, original.Height, GraphicsUnit.Pixel, attr);
+            }
+
+            return enhanced;
+        }
+
         static void PlayVideo(string path)
         {
             Console.CursorVisible = false;
@@ -137,7 +171,7 @@ namespace ASCIIVideoPlayer
                     reader.Open(path);
                     Console.Clear();
                     Console.WriteLine($"Видео: {reader.Width}x{reader.Height}, FPS: {reader.FrameRate.Value:F1}");
-                    Console.WriteLine($"Режим: {(colorMode ? "Цветной" : "Серый")}");
+                    Console.WriteLine($"Режим: {(colorMode == 0 ? "Серый" : colorMode == 1 ? "Цветной" : "Цветной улучшенный")}");
                     Console.WriteLine("Нажмите любую клавишу для начала. ESC для выхода.");
                     Console.ReadKey(true);
                     Console.Clear();
@@ -163,8 +197,11 @@ namespace ASCIIVideoPlayer
                         {
                             if (frame == null) break;
 
-                            CHAR_INFO[] buffer = ConvertToBuffer(frame, targetW, targetH, consoleW, consoleH);
-                            WriteBuffer(buffer, consoleW, consoleH);
+                            using (Bitmap enhanced = EnhanceImage(frame))
+                            {
+                                CHAR_INFO[] buffer = ConvertToBuffer(enhanced, targetW, targetH, consoleW, consoleH);
+                                WriteBuffer(buffer, consoleW, consoleH);
+                            }
                             frameNum++;
 
                             SyncWithAudio(frameNum, fps, reader, ref frameNum);
@@ -368,7 +405,20 @@ namespace ASCIIVideoPlayer
                         int brightness = (int)(r * 0.299 + g * 0.587 + b * 0.114);
 
                         buffer[bufIdx].UnicodeChar = asciiChars[brightness * maxChar / 255];
-                        buffer[bufIdx].Attributes = colorMode ? GetConsoleColor(r, g, b) : (short)7;
+
+                        if (colorMode == 0)
+                        {
+                            buffer[bufIdx].Attributes = (short)7;
+                        }
+                        else if (colorMode == 1)
+                        {
+                            buffer[bufIdx].Attributes = GetConsoleColor(r, g, b);
+                        }
+                        else
+                        {
+                            buffer[bufIdx].Attributes = GetEnhancedConsoleColor(r, g, b);
+                        }
+
                         bufIdx++;
                     }
 
@@ -419,6 +469,70 @@ namespace ASCIIVideoPlayer
 
             if (r > 192 || g > 192 || b > 192)
                 color |= 0x08;
+
+            return color;
+        }
+
+        static short GetEnhancedConsoleColor(byte r, byte g, byte b)
+        {
+            int brightness = (r + g + b) / 3;
+
+            int max = Math.Max(r, Math.Max(g, b));
+            int min = Math.Min(r, Math.Min(g, b));
+            int delta = max - min;
+
+            if (delta < 25)
+            {
+                if (brightness < 32) return 0x00;
+                if (brightness < 80) return 0x08;
+                if (brightness < 160) return 0x07;
+                return 0x0F;
+            }
+
+            short color = 0;
+
+            if (r > g + 20 && r > b + 20)
+            {
+                color = 0x04;
+                if (r > 180 || brightness > 140) color |= 0x08;
+            }
+            else if (g > r + 20 && g > b + 20)
+            {
+                color = 0x02;
+                if (g > 180 || brightness > 140) color |= 0x08;
+            }
+            else if (b > r + 20 && b > g + 20)
+            {
+                color = 0x01;
+                if (b > 180 || brightness > 140) color |= 0x08;
+            }
+            else if (r > 100 && g > 100 && b < 80)
+            {
+                color = 0x06;
+                if (r > 180 || g > 180) color |= 0x08;
+            }
+            else if (r > 100 && b > 100 && g < 80)
+            {
+                color = 0x05;
+                if (r > 180 || b > 180) color |= 0x08;
+            }
+            else if (g > 100 && b > 100 && r < 80)
+            {
+                color = 0x03;
+                if (g > 180 || b > 180) color |= 0x08;
+            }
+            else
+            {
+                bool rHigh = r > 100;
+                bool gHigh = g > 100;
+                bool bHigh = b > 100;
+
+                if (rHigh) color |= 0x04;
+                if (gHigh) color |= 0x02;
+                if (bHigh) color |= 0x01;
+
+                if (brightness > 150) color |= 0x08;
+            }
 
             return color;
         }
