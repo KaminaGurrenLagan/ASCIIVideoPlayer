@@ -151,11 +151,6 @@ namespace ASCIIVideoPlayer
             {
                 using (Bitmap img = new Bitmap(path))
                 {
-                    int consoleW = Console.WindowWidth;
-                    int consoleH = Console.WindowHeight - 3;
-                    int targetW = consoleW;
-                    int targetH = (int)(consoleH / AspectRatio);
-
                     Console.WriteLine($"Изображение: {img.Width}x{img.Height}");
                     Console.WriteLine($"Режим: {(colorMode == 0 ? "Серый" : colorMode == 1 ? "Цветной" : "Цветной улучшенный")}");
                     Console.WriteLine("Нажмите любую клавишу для отображения. ESC для выхода.\n");
@@ -163,21 +158,54 @@ namespace ASCIIVideoPlayer
                     ConsoleKeyInfo key = Console.ReadKey(true);
                     if (key.Key == ConsoleKey.Escape) return;
 
-                    Console.Clear();
-
-                    Bitmap processedImg = (colorMode == 2) ? EnhanceImage(img) : img;
-                    CHAR_INFO[] buffer = ConvertToBuffer(processedImg, targetW, targetH, consoleW, consoleH);
-                    if (processedImg != img) processedImg.Dispose();
-
-                    WriteBuffer(buffer, consoleW, consoleH);
-
-                    Console.SetCursorPosition(0, consoleH);
-                    Console.WriteLine("ESC - выход | M - меню");
+                    bool needRedraw = true;
+                    int lastW = 0, lastH = 0;
 
                     while (true)
                     {
-                        key = Console.ReadKey(true);
-                        if (key.Key == ConsoleKey.Escape || key.Key == ConsoleKey.M) break;
+                        int consoleW = Console.WindowWidth;
+                        int consoleH = Console.WindowHeight;
+
+                        if (needRedraw || consoleW != lastW || consoleH != lastH)
+                        {
+                            try
+                            {
+                                Console.Clear();
+                                Console.CursorVisible = false;
+                                Console.SetCursorPosition(0, 0);
+
+                                int targetW = consoleW;
+                                int targetH = Math.Min((int)(consoleH / AspectRatio), consoleH - 2);
+
+                                Bitmap processedImg = (colorMode == 2) ? EnhanceImage(img) : img;
+                                CHAR_INFO[] buffer = ConvertToBuffer(processedImg, targetW, targetH, consoleW, consoleH);
+                                if (processedImg != img) processedImg.Dispose();
+
+                                WriteBuffer(buffer, consoleW, consoleH);
+
+                                if (consoleH > 2)
+                                {
+                                    Console.SetCursorPosition(0, consoleH - 1);
+                                    Console.Write("ESC - выход | M - меню");
+                                }
+
+                                lastW = consoleW;
+                                lastH = consoleH;
+                                needRedraw = false;
+                            }
+                            catch
+                            {
+                                Thread.Sleep(100);
+                            }
+                        }
+
+                        if (Console.KeyAvailable)
+                        {
+                            key = Console.ReadKey(true);
+                            if (key.Key == ConsoleKey.Escape || key.Key == ConsoleKey.M) break;
+                        }
+
+                        Thread.Sleep(50);
                     }
                 }
             }
@@ -274,14 +302,35 @@ namespace ASCIIVideoPlayer
                     Thread.Sleep(500);
 
                     long frameNum = 0;
-                    int consoleW = Console.WindowWidth;
-                    int consoleH = Console.WindowHeight;
-                    int targetW = consoleW;
-                    int targetH = (int)(consoleH / AspectRatio);
+                    int lastW = Console.WindowWidth;
+                    int lastH = Console.WindowHeight;
 
                     while (true)
                     {
                         long startTick = Environment.TickCount;
+
+                        int consoleW = Console.WindowWidth;
+                        int consoleH = Console.WindowHeight;
+
+                        if (consoleW != lastW || consoleH != lastH)
+                        {
+                            try
+                            {
+                                Console.Clear();
+                                Console.CursorVisible = false;
+                                Console.SetCursorPosition(0, 0);
+                                lastW = consoleW;
+                                lastH = consoleH;
+                            }
+                            catch
+                            {
+                                Thread.Sleep(50);
+                                continue;
+                            }
+                        }
+
+                        int targetW = consoleW;
+                        int targetH = Math.Min((int)(consoleH / AspectRatio), consoleH);
 
                         using (Bitmap frame = reader.ReadVideoFrame())
                         {
@@ -448,14 +497,18 @@ namespace ASCIIVideoPlayer
 
         static void WriteBuffer(CHAR_INFO[] buffer, int w, int h)
         {
-            IntPtr handle = GetStdHandle(STD_OUTPUT_HANDLE);
-            if (handle == IntPtr.Zero) return;
+            try
+            {
+                IntPtr handle = GetStdHandle(STD_OUTPUT_HANDLE);
+                if (handle == IntPtr.Zero) return;
 
-            COORD bufSize = new COORD { X = (short)w, Y = (short)h };
-            COORD bufCoord = new COORD { X = 0, Y = 0 };
-            SMALL_RECT region = new SMALL_RECT { Left = 0, Top = 0, Right = (short)(w - 1), Bottom = (short)(h - 1) };
+                COORD bufSize = new COORD { X = (short)w, Y = (short)h };
+                COORD bufCoord = new COORD { X = 0, Y = 0 };
+                SMALL_RECT region = new SMALL_RECT { Left = 0, Top = 0, Right = (short)(w - 1), Bottom = (short)(h - 1) };
 
-            WriteConsoleOutput(handle, buffer, bufSize, bufCoord, ref region);
+                WriteConsoleOutput(handle, buffer, bufSize, bufCoord, ref region);
+            }
+            catch { }
         }
 
         static CHAR_INFO[] ConvertToBuffer(Bitmap img, int w, int h, int consoleW, int consoleH)
@@ -565,7 +618,7 @@ namespace ASCIIVideoPlayer
             int min = Math.Min(r, Math.Min(g, b));
             int delta = max - min;
 
-            if (delta < 30)
+            if (delta < 35)
             {
                 if (brightness < 32) return 0x00;
                 if (brightness < 80) return 0x08;
@@ -574,69 +627,58 @@ namespace ASCIIVideoPlayer
             }
 
             short color = 0;
-            int secondMax = 0;
 
-            if (r >= g && r >= b)
+            int rDiff = r - Math.Max(g, b);
+            int gDiff = g - Math.Max(r, b);
+            int bDiff = b - Math.Max(r, g);
+
+            if (rDiff > 45 && g < 100 && b < 100)
             {
-                secondMax = Math.Max(g, b);
-                if (r > secondMax + 40 && secondMax < 120)
-                {
-                    color = 0x04;
-                    if (r > 180 || brightness > 140) color |= 0x08;
-                    return color;
-                }
-            }
-            else if (g >= r && g >= b)
-            {
-                secondMax = Math.Max(r, b);
-                if (g > secondMax + 35)
-                {
-                    color = 0x02;
-                    if (g > 180 || brightness > 140) color |= 0x08;
-                    return color;
-                }
-            }
-            else if (b >= r && b >= g)
-            {
-                secondMax = Math.Max(r, g);
-                if (b > secondMax + 35)
-                {
-                    color = 0x01;
-                    if (b > 180 || brightness > 140) color |= 0x08;
-                    return color;
-                }
+                color = 0x04;
+                if (r > 190 && brightness > 120) color |= 0x08;
+                return color;
             }
 
-            if (r > 110 && g > 110 && b < 90)
+            if (gDiff > 40)
+            {
+                color = 0x02;
+                if (g > 190 && brightness > 130) color |= 0x08;
+                return color;
+            }
+
+            if (bDiff > 40)
+            {
+                color = 0x01;
+                if (b > 190 && brightness > 130) color |= 0x08;
+                return color;
+            }
+
+            if (r > 100 && g > 100 && b < 85 && Math.Abs(r - g) < 40)
             {
                 color = 0x06;
-                if ((r > 180 || g > 180) && brightness > 130) color |= 0x08;
+                if (brightness > 140) color |= 0x08;
                 return color;
             }
 
-            if (r > 110 && b > 110 && g < 90)
+            if (r > 100 && b > 100 && g < 85 && Math.Abs(r - b) < 40)
             {
                 color = 0x05;
-                if ((r > 180 || b > 180) && brightness > 130) color |= 0x08;
+                if (brightness > 140) color |= 0x08;
                 return color;
             }
 
-            if (g > 110 && b > 110 && r < 90)
+            if (g > 100 && b > 100 && r < 85 && Math.Abs(g - b) < 40)
             {
                 color = 0x03;
-                if ((g > 180 || b > 180) && brightness > 130) color |= 0x08;
+                if (brightness > 140) color |= 0x08;
                 return color;
             }
 
-            bool rHigh = r > 110;
-            bool gHigh = g > 110;
-            bool bHigh = b > 110;
+            if (r > 105) color |= 0x04;
+            if (g > 105) color |= 0x02;
+            if (b > 105) color |= 0x01;
 
-            if (rHigh) color |= 0x04;
-            if (gHigh) color |= 0x02;
-            if (bHigh) color |= 0x01;
-
-            if (brightness > 160) color |= 0x08;
+            if (brightness > 165 || (max > 200 && delta < 50)) color |= 0x08;
 
             return color;
         }
