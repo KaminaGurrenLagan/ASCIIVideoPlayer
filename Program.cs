@@ -6,7 +6,6 @@ using System.Text;
 using System.Threading;
 using System.Runtime.InteropServices;
 using System.IO;
-using System.Threading.Tasks;
 using Accord.Video.FFMPEG;
 using NAudio.Wave;
 
@@ -20,192 +19,173 @@ namespace ASCIIVideoPlayer
         static extern IntPtr GetStdHandle(int nStdHandle);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        static extern bool WriteConsoleOutput(
-            IntPtr hConsoleOutput,
-            [In] CHAR_INFO[] lpBuffer,
-            COORD dwBufferSize,
-            COORD dwBufferCoord,
-            ref SMALL_RECT lpWriteRegion
-        );
+        static extern bool WriteConsoleOutput(IntPtr hConsoleOutput, [In] CHAR_INFO[] lpBuffer,
+            COORD dwBufferSize, COORD dwBufferCoord, ref SMALL_RECT lpWriteRegion);
 
         [StructLayout(LayoutKind.Sequential)]
-        struct COORD
-        {
-            public short X;
-            public short Y;
-        }
+        struct COORD { public short X; public short Y; }
 
         [StructLayout(LayoutKind.Explicit)]
         struct CHAR_INFO
         {
             [FieldOffset(0)] public char UnicodeChar;
-            [FieldOffset(0)] public short AsciiChar;
             [FieldOffset(2)] public short Attributes;
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        struct SMALL_RECT
-        {
-            public short Left;
-            public short Top;
-            public short Right;
-            public short Bottom;
-        }
+        struct SMALL_RECT { public short Left; public short Top; public short Right; public short Bottom; }
 
         private static IWavePlayer waveOut;
-        private static AudioFileReader audioFileReader;
-        private static CancellationTokenSource cts = new CancellationTokenSource();
-        private static string tempAudioPath = null;
-        private static object audioLock = new object();
-
+        private static AudioFileReader audioReader;
+        private static string tempAudioPath;
+        private static readonly object audioLock = new object();
         private static readonly char[] asciiChars = { ' ', '.', ':', '-', '=', '+', '*', '#', '%', 'S', '@' };
-        private const double AspectRatioCompensation = 2.2;
-        private const int MinConsoleWidth = 80;
+        private const double AspectRatio = 2.2;
+        private const int MinWidth = 80;
+
+        private static bool colorMode = true;
+        private static bool isVideo = true;
 
         static void Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
+            try { Console.SetWindowSize(160, 80); Console.SetBufferSize(160, 80); } catch { }
 
-            try
+            Console.WriteLine("ASCII Video/Photo Player (C# 4.8 .NET Framework)\n=======================================================");
+
+            Console.WriteLine("\nВыберите режим:");
+            Console.WriteLine("1 - Видео (цветное)");
+            Console.WriteLine("2 - Видео (серое)");
+            Console.WriteLine("3 - Фото (цветное)");
+            Console.WriteLine("4 - Фото (серое)");
+            Console.Write("\nВаш выбор: ");
+
+            string choice = Console.ReadLine();
+            switch (choice)
             {
-                Console.SetWindowSize(160, 80);
-                Console.SetBufferSize(160, 80);
+                case "1": colorMode = true; isVideo = true; break;
+                case "2": colorMode = false; isVideo = true; break;
+                case "3": colorMode = true; isVideo = false; break;
+                case "4": colorMode = false; isVideo = false; break;
+                default:
+                    Console.WriteLine("Неверный выбор, используется режим: Видео (цветное)");
+                    colorMode = true; isVideo = true;
+                    break;
             }
-            catch { }
 
-            Console.WriteLine("ASCII Video Player (Исправленная версия)");
-            Console.WriteLine("=======================================================");
-            Console.Write("Введите путь к видео файлу: ");
+            Console.Write("\nВведите путь к файлу: ");
+            string path = args.Length > 0 ? args[0] : Console.ReadLine();
 
-            string videoPath = args.Length > 0 ? args[0] : Console.ReadLine();
-
-            if (string.IsNullOrEmpty(videoPath) || !System.IO.File.Exists(videoPath))
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
             {
                 Console.WriteLine("Файл не найден!");
                 Console.ReadKey();
                 return;
             }
 
-            PlayVideo(videoPath);
+            if (isVideo)
+                PlayVideo(path);
+            else
+                ShowPhoto(path);
+        }
+
+        static void ShowPhoto(string path)
+        {
+            Console.CursorVisible = false;
+            Console.Clear();
+
+            try
+            {
+                using (Bitmap img = new Bitmap(path))
+                {
+                    int consoleW = Math.Max(Console.WindowWidth, MinWidth);
+                    int consoleH = Console.WindowHeight;
+                    int targetW = consoleW;
+                    int targetH = (int)(consoleH / AspectRatio);
+
+                    Console.WriteLine($"Изображение: {img.Width}x{img.Height}");
+                    Console.WriteLine($"Режим: {(colorMode ? "Цветной" : "Серый")}");
+                    Console.WriteLine("Нажмите любую клавишу для отображения. ESC для выхода.\n");
+                    Console.ReadKey(true);
+                    Console.Clear();
+
+                    CHAR_INFO[] buffer = ConvertToBuffer(img, targetW, targetH, consoleW, consoleH);
+                    WriteBuffer(buffer, consoleW, consoleH);
+
+                    Console.WriteLine("\n\nНажмите ESC для выхода...");
+                    while (Console.ReadKey(true).Key != ConsoleKey.Escape) { }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Clear();
+                Console.WriteLine($"Ошибка загрузки изображения: {ex.Message}");
+            }
+            finally
+            {
+                Console.CursorVisible = true;
+            }
         }
 
         static void PlayVideo(string path)
         {
             Console.CursorVisible = false;
-
-            using (var reader = new VideoFileReader())
+            using (VideoFileReader reader = new VideoFileReader())
             {
                 try
                 {
                     reader.Open(path);
-
                     Console.Clear();
                     Console.WriteLine($"Видео: {reader.Width}x{reader.Height}, FPS: {reader.FrameRate.Value:F1}");
+                    Console.WriteLine($"Режим: {(colorMode ? "Цветной" : "Серый")}");
                     Console.WriteLine("Нажмите любую клавишу для начала. ESC для выхода.");
                     Console.ReadKey(true);
-
                     Console.Clear();
 
                     double fps = reader.FrameRate.Value;
-                    int frameDelay = (int)(1000.0 / fps);
-                    if (frameDelay < 1) frameDelay = 1;
-
+                    int frameDelay = Math.Max(1, (int)(1000.0 / fps));
                     Thread.CurrentThread.Priority = ThreadPriority.AboveNormal;
 
                     StartAudio(path);
-
                     Thread.Sleep(500);
 
-                    long frameNumber = 0;
-                    var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+                    long frameNum = 0;
+                    int consoleW = Math.Max(Console.WindowWidth, MinWidth);
+                    int consoleH = Console.WindowHeight;
+                    int targetW = consoleW;
+                    int targetH = (int)(consoleH / AspectRatio);
 
                     while (true)
                     {
-                        int consoleWidth = Math.Max(Console.WindowWidth, MinConsoleWidth);
-                        int consoleHeight = Console.WindowHeight;
-
-                        int targetWidth = consoleWidth;
-                        int targetHeight = (int)(consoleHeight / AspectRatioCompensation);
-
-                        long frameStartTime = Environment.TickCount;
+                        long startTick = Environment.TickCount;
 
                         using (Bitmap frame = reader.ReadVideoFrame())
                         {
-                            if (frame == null)
-                                break;
+                            if (frame == null) break;
 
-                            string asciiContent = ConvertToASCII_Optimized(frame, targetWidth, targetHeight);
-                            string fullFrame = PadFrame(asciiContent, consoleWidth, consoleHeight);
-                            WriteAsciiFrameToBuffer(fullFrame, consoleWidth, consoleHeight);
+                            CHAR_INFO[] buffer = ConvertToBuffer(frame, targetW, targetH, consoleW, consoleH);
+                            WriteBuffer(buffer, consoleW, consoleH);
+                            frameNum++;
 
-                            frameNumber++;
-
-                            double expectedVideoTime = frameNumber / fps;
-
-                            lock (audioLock)
-                            {
-                                if (audioFileReader != null && waveOut != null && waveOut.PlaybackState == PlaybackState.Playing)
-                                {
-                                    double audioTime = audioFileReader.CurrentTime.TotalSeconds;
-                                    double diff = Math.Abs(audioTime - expectedVideoTime);
-
-                                    double tolerance = 3.0 / fps;
-
-                                    if (diff > tolerance && diff < 5.0) 
-                                    {
-                                        if (expectedVideoTime < audioTime - tolerance)
-                                        {
-                                            int framesToSkip = (int)((audioTime - expectedVideoTime) * fps);
-                                            if (framesToSkip > 0 && framesToSkip < 30) 
-                                            {
-                                                Console.Title = $"[Пропуск {framesToSkip} кадров для синхронизации]";
-                                                for (int i = 0; i < framesToSkip; i++)
-                                                {
-                                                    using (var skipFrame = reader.ReadVideoFrame())
-                                                    {
-                                                        if (skipFrame == null) break;
-                                                    }
-                                                    frameNumber++;
-                                                }
-                                            }
-                                        }
-                                        else if (expectedVideoTime > audioTime + tolerance)
-                                        {
-                                            int extraDelay = (int)((expectedVideoTime - audioTime) * 1000);
-                                            if (extraDelay > 0 && extraDelay < 500) 
-                                            {
-                                                Thread.Sleep(extraDelay);
-                                            }
-                                        }
-                                    }
-
-                                    Console.Title = $"Frame: {frameNumber} | Video: {expectedVideoTime:F2}s | Audio: {audioTime:F2}s | Diff: {(expectedVideoTime - audioTime):F3}s";
-                                }
-                            }
+                            SyncWithAudio(frameNum, fps, reader, ref frameNum);
                         }
 
-                        int elapsed = (int)(Environment.TickCount - frameStartTime);
-                        int sleepTime = frameDelay - elapsed;
-
-                        if (sleepTime > 0)
-                        {
-                            Thread.Sleep(sleepTime);
-                        }
+                        int elapsed = (int)(Environment.TickCount - startTick);
+                        int sleep = frameDelay - elapsed;
+                        if (sleep > 0) Thread.Sleep(sleep);
 
                         if (Console.KeyAvailable && Console.ReadKey(true).Key == ConsoleKey.Escape)
                             break;
                     }
 
                     StopAudio();
-
                     Console.Clear();
                     Console.WriteLine("\n\nВоспроизведение завершено!");
                 }
                 catch (Exception ex)
                 {
                     Console.Clear();
-                    Console.WriteLine($"Ошибка: {ex.Message}");
-                    Console.WriteLine($"Stack trace: {ex.StackTrace}");
+                    Console.WriteLine($"Ошибка: {ex.Message}\nStack trace: {ex.StackTrace}");
                     StopAudio();
                 }
                 finally
@@ -218,110 +198,105 @@ namespace ASCIIVideoPlayer
             Console.ReadKey(true);
         }
 
-        /// <summary>
-        /// Инициализирует и запускает воспроизведение аудиодорожки.
-        /// </summary>
+        static void SyncWithAudio(long frameNum, double fps, VideoFileReader reader, ref long frameNumber)
+        {
+            lock (audioLock)
+            {
+                if (audioReader == null || waveOut == null || waveOut.PlaybackState != PlaybackState.Playing) return;
+
+                double videoTime = frameNum / fps;
+                double audioTime = audioReader.CurrentTime.TotalSeconds;
+                double diff = Math.Abs(audioTime - videoTime);
+                double tolerance = 3.0 / fps;
+
+                if (diff > tolerance && diff < 5.0)
+                {
+                    if (videoTime < audioTime - tolerance)
+                    {
+                        int skip = Math.Min(30, (int)((audioTime - videoTime) * fps));
+                        Console.Title = $"[Пропуск {skip} кадров]";
+                        for (int i = 0; i < skip; i++)
+                        {
+                            using (Bitmap skipFrame = reader.ReadVideoFrame())
+                            {
+                                if (skipFrame == null) break;
+                            }
+                            frameNumber++;
+                        }
+                    }
+                    else if (videoTime > audioTime + tolerance)
+                    {
+                        int delay = Math.Min(500, (int)((videoTime - audioTime) * 1000));
+                        Thread.Sleep(delay);
+                    }
+                }
+
+                Console.Title = $"Frame: {frameNum} | Video: {videoTime:F2}s | Audio: {audioTime:F2}s | Diff: {(videoTime - audioTime):F3}s";
+            }
+        }
+
         static void StartAudio(string videoPath)
         {
             try
             {
-                Console.Write("[Аудио] Извлечение аудиодорожки...");
-
+                Console.Write("[Аудио] Извлечение...");
                 tempAudioPath = Path.Combine(Path.GetTempPath(),
-                    Path.GetFileNameWithoutExtension(videoPath) + "_temp_" +
-                    Guid.NewGuid().ToString().Substring(0, 8) + ".wav");
+                    Path.GetFileNameWithoutExtension(videoPath) + "_temp_" + Guid.NewGuid().ToString().Substring(0, 8) + ".wav");
 
-                using (var reader = new MediaFoundationReader(videoPath))
+                using (MediaFoundationReader reader = new MediaFoundationReader(videoPath))
                 {
-                    var resampler = new MediaFoundationResampler(reader, new WaveFormat(44100, 16, 2));
-
-                    using (var writer = new WaveFileWriter(tempAudioPath, resampler.WaveFormat))
+                    MediaFoundationResampler resampler = new MediaFoundationResampler(reader, new WaveFormat(44100, 16, 2));
+                    using (WaveFileWriter writer = new WaveFileWriter(tempAudioPath, resampler.WaveFormat))
                     {
                         byte[] buffer = new byte[reader.WaveFormat.AverageBytesPerSecond];
                         int read;
                         while ((read = resampler.Read(buffer, 0, buffer.Length)) > 0)
-                        {
                             writer.Write(buffer, 0, read);
-                        }
                     }
                 }
 
                 Console.WriteLine(" Готово.");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"\n[Аудио Ошибка] Не удалось извлечь звук: {ex.Message}");
-                tempAudioPath = null;
-                return;
-            }
 
-            try
-            {
                 lock (audioLock)
                 {
-                    waveOut = new WaveOutEvent
-                    {
-                        DesiredLatency = 300, 
-                        NumberOfBuffers = 3   
-                    };
+                    waveOut = new WaveOutEvent();
+                    ((WaveOutEvent)waveOut).DesiredLatency = 300;
+                    ((WaveOutEvent)waveOut).NumberOfBuffers = 3;
 
-                    audioFileReader = new AudioFileReader(tempAudioPath)
-                    {
-                        Volume = 0.5f
-                    };
+                    audioReader = new AudioFileReader(tempAudioPath);
+                    audioReader.Volume = 0.5f;
 
-                    waveOut.PlaybackStopped += (sender, e) =>
+                    waveOut.PlaybackStopped += delegate (object s, StoppedEventArgs e)
                     {
                         if (e.Exception != null)
-                        {
                             Console.WriteLine($"\n[АУДИО ОШИБКА] {e.Exception.Message}");
-                        }
                     };
 
-                    waveOut.Init(audioFileReader);
+                    waveOut.Init(audioReader);
                     waveOut.Play();
-
                     Console.WriteLine("[Аудио] Воспроизведение начато.");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"\n[Аудио Ошибка] Не удалось запустить звук: {ex.Message}");
-                StopAudio();
+                Console.WriteLine($"\n[Аудио Ошибка] {ex.Message}");
+                tempAudioPath = null;
             }
         }
 
-        /// <summary>
-        /// Останавливает и очищает ресурсы NAudio, удаляет временный файл.
-        /// </summary>
         static void StopAudio()
         {
-            if (cts != null)
-            {
-                cts.Cancel();
-            }
-
             lock (audioLock)
             {
                 if (waveOut != null)
                 {
-                    try
-                    {
-                        waveOut.Stop();
-                        waveOut.Dispose();
-                    }
-                    catch { }
+                    try { waveOut.Stop(); waveOut.Dispose(); } catch { }
                     waveOut = null;
                 }
-
-                if (audioFileReader != null)
+                if (audioReader != null)
                 {
-                    try
-                    {
-                        audioFileReader.Dispose();
-                    }
-                    catch { }
-                    audioFileReader = null;
+                    try { audioReader.Dispose(); } catch { }
+                    audioReader = null;
                 }
             }
 
@@ -332,11 +307,11 @@ namespace ASCIIVideoPlayer
                 try
                 {
                     File.Delete(tempAudioPath);
-                    Console.WriteLine($"[Аудио] Временный файл удален.");
+                    Console.WriteLine("[Аудио] Временный файл удален.");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[Аудио] Не удалось удалить временный файл: {ex.Message}");
+                    Console.WriteLine($"[Аудио] Ошибка удаления: {ex.Message}");
                 }
                 finally
                 {
@@ -345,118 +320,107 @@ namespace ASCIIVideoPlayer
             }
         }
 
-        static void WriteAsciiFrameToBuffer(string asciiFrame, int width, int height)
+        static void WriteBuffer(CHAR_INFO[] buffer, int w, int h)
         {
-            IntPtr hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-            if (hConsole == IntPtr.Zero) return;
+            IntPtr handle = GetStdHandle(STD_OUTPUT_HANDLE);
+            if (handle == IntPtr.Zero) return;
 
-            CHAR_INFO[] buffer = new CHAR_INFO[width * height];
-            int bufferIndex = 0;
+            COORD bufSize = new COORD { X = (short)w, Y = (short)h };
+            COORD bufCoord = new COORD { X = 0, Y = 0 };
+            SMALL_RECT region = new SMALL_RECT { Left = 0, Top = 0, Right = (short)(w - 1), Bottom = (short)(h - 1) };
 
-            for (int i = 0; i < asciiFrame.Length && bufferIndex < buffer.Length; i++)
-            {
-                if (asciiFrame[i] == '\n') continue;
-
-                buffer[bufferIndex].UnicodeChar = asciiFrame[i];
-                buffer[bufferIndex].Attributes = 7;
-                bufferIndex++;
-            }
-
-            COORD bufferSize = new COORD { X = (short)width, Y = (short)height };
-            COORD bufferCoord = new COORD { X = 0, Y = 0 };
-            SMALL_RECT writeRegion = new SMALL_RECT
-            {
-                Left = 0,
-                Top = 0,
-                Right = (short)(width - 1),
-                Bottom = (short)(height - 1)
-            };
-
-            WriteConsoleOutput(hConsole, buffer, bufferSize, bufferCoord, ref writeRegion);
+            WriteConsoleOutput(handle, buffer, bufSize, bufCoord, ref region);
         }
 
-        static string ConvertToASCII_Optimized(Bitmap image, int width, int height)
+        static CHAR_INFO[] ConvertToBuffer(Bitmap img, int w, int h, int consoleW, int consoleH)
         {
-            if (width <= 0 || height <= 0) return new string('\n', 1);
+            CHAR_INFO[] buffer = new CHAR_INFO[consoleW * consoleH];
 
-            using (Bitmap resized = new Bitmap(width, height))
+            using (Bitmap resized = new Bitmap(w, h))
             {
                 using (Graphics g = Graphics.FromImage(resized))
                 {
                     g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                    g.DrawImage(image, 0, 0, width, height);
+                    g.DrawImage(img, 0, 0, w, h);
                 }
 
-                StringBuilder sb = new StringBuilder(width * height);
+                Rectangle rect = new Rectangle(0, 0, w, h);
+                BitmapData data = resized.LockBits(rect, ImageLockMode.ReadOnly, resized.PixelFormat);
 
-                Rectangle rect = new Rectangle(0, 0, resized.Width, resized.Height);
-                BitmapData bmpData = resized.LockBits(rect, ImageLockMode.ReadOnly, resized.PixelFormat);
-
-                IntPtr ptr = bmpData.Scan0;
-                int bytes = Math.Abs(bmpData.Stride) * resized.Height;
-                byte[] rgbValues = new byte[bytes];
-                Marshal.Copy(ptr, rgbValues, 0, bytes);
+                int bytes = Math.Abs(data.Stride) * h;
+                byte[] rgb = new byte[bytes];
+                Marshal.Copy(data.Scan0, rgb, 0, bytes);
 
                 int depth = Image.GetPixelFormatSize(resized.PixelFormat) / 8;
+                int maxChar = asciiChars.Length - 1;
+                int bufIdx = 0;
 
-                for (int y = 0; y < resized.Height; y++)
+                for (int y = 0; y < h && y < consoleH; y++)
                 {
-                    int lineStart = y * bmpData.Stride;
-                    for (int x = 0; x < resized.Width; x++)
+                    int lineStart = y * data.Stride;
+                    for (int x = 0; x < w && x < consoleW; x++)
                     {
-                        int pixelIndex = lineStart + x * depth;
-
-                        byte b = rgbValues[pixelIndex];
-                        byte g = rgbValues[pixelIndex + 1];
-                        byte r = rgbValues[pixelIndex + 2];
+                        int idx = lineStart + x * depth;
+                        byte b = rgb[idx];
+                        byte g = rgb[idx + 1];
+                        byte r = rgb[idx + 2];
 
                         int brightness = (int)(r * 0.299 + g * 0.587 + b * 0.114);
-                        int charIndex = (brightness * (asciiChars.Length - 1)) / 255;
 
-                        sb.Append(asciiChars[charIndex]);
+                        buffer[bufIdx].UnicodeChar = asciiChars[brightness * maxChar / 255];
+                        buffer[bufIdx].Attributes = colorMode ? GetConsoleColor(r, g, b) : (short)7;
+                        bufIdx++;
                     }
-                    sb.Append('\n');
+
+                    for (int x = w; x < consoleW; x++)
+                    {
+                        buffer[bufIdx].UnicodeChar = ' ';
+                        buffer[bufIdx].Attributes = 7;
+                        bufIdx++;
+                    }
                 }
 
-                resized.UnlockBits(bmpData);
+                for (int y = h; y < consoleH; y++)
+                {
+                    for (int x = 0; x < consoleW; x++)
+                    {
+                        buffer[bufIdx].UnicodeChar = ' ';
+                        buffer[bufIdx].Attributes = 7;
+                        bufIdx++;
+                    }
+                }
 
-                return sb.ToString();
+                resized.UnlockBits(data);
             }
+
+            return buffer;
         }
 
-        static string PadFrame(string asciiContent, int consoleWidth, int consoleHeight)
+        static short GetConsoleColor(byte r, byte g, byte b)
         {
-            StringBuilder paddedContent = new StringBuilder(consoleWidth * consoleHeight);
-            StringReader reader = new StringReader(asciiContent);
-            int linesRead = 0;
+            bool rHigh = r > 127;
+            bool gHigh = g > 127;
+            bool bHigh = b > 127;
 
-            string line;
-            while ((line = reader.ReadLine()) != null && linesRead < consoleHeight)
+            int gray = (r + g + b) / 3;
+
+            if (Math.Abs(r - g) < 30 && Math.Abs(g - b) < 30 && Math.Abs(r - b) < 30)
             {
-                int lineLength = line.Length;
-
-                paddedContent.Append(line);
-
-                if (lineLength < consoleWidth)
-                {
-                    paddedContent.Append(' ', consoleWidth - lineLength);
-                }
-
-                paddedContent.Append('\n');
-                linesRead++;
+                if (gray < 64) return 0x00;
+                if (gray < 128) return 0x08;
+                if (gray < 192) return 0x07;
+                return 0x0F;
             }
 
-            int paddingLines = consoleHeight - linesRead;
-            if (paddingLines > 0)
-            {
-                string emptyLineWithPadding = new string(' ', consoleWidth) + '\n';
-                for (int i = 0; i < paddingLines; i++)
-                {
-                    paddedContent.Append(emptyLineWithPadding);
-                }
-            }
+            short color = 0;
+            if (rHigh) color |= 0x04;
+            if (gHigh) color |= 0x02;
+            if (bHigh) color |= 0x01;
 
-            return paddedContent.ToString();
+            if (r > 192 || g > 192 || b > 192)
+                color |= 0x08;
+
+            return color;
         }
     }
 }
