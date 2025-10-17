@@ -49,48 +49,97 @@ namespace ASCIIVideoPlayer
         static void Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
-            try { Console.SetWindowSize(160, 80); Console.SetBufferSize(160, 80); } catch { }
+            MaximizeConsole();
 
-            Console.WriteLine("ASCII Video/Photo Player (C# 4.8 .NET Framework)\n=======================================================");
-
-            Console.WriteLine("\nВыберите режим:");
-            Console.WriteLine("1 - Видео (цветное)");
-            Console.WriteLine("2 - Видео (серое)");
-            Console.WriteLine("3 - Видео (цветное улучшенное)");
-            Console.WriteLine("4 - Фото (цветное)");
-            Console.WriteLine("5 - Фото (серое)");
-            Console.WriteLine("6 - Фото (цветное улучшенное)");
-            Console.Write("\nВаш выбор: ");
-
-            string choice = Console.ReadLine();
-            switch (choice)
+            while (true)
             {
-                case "1": colorMode = 1; isVideo = true; break;
-                case "2": colorMode = 0; isVideo = true; break;
-                case "3": colorMode = 2; isVideo = true; break;
-                case "4": colorMode = 1; isVideo = false; break;
-                case "5": colorMode = 0; isVideo = false; break;
-                case "6": colorMode = 2; isVideo = false; break;
-                default:
-                    Console.WriteLine("Неверный выбор, используется режим: Видео (цветное)");
-                    colorMode = 1; isVideo = true;
-                    break;
+                Console.Clear();
+                Console.WriteLine("ASCII Video/Photo Player (C# 4.8 .NET Framework)\n=======================================================");
+
+                Console.WriteLine("\nВыберите режим:");
+                Console.WriteLine("1 - Видео (цветное)");
+                Console.WriteLine("2 - Видео (серое)");
+                Console.WriteLine("3 - Видео (цветное улучшенное)");
+                Console.WriteLine("4 - Фото (цветное)");
+                Console.WriteLine("5 - Фото (серое)");
+                Console.WriteLine("6 - Фото (цветное улучшенное)");
+                Console.WriteLine("0 - Выход");
+                Console.Write("\nВаш выбор: ");
+
+                string choice = Console.ReadLine();
+
+                if (choice == "0") break;
+
+                switch (choice)
+                {
+                    case "1": colorMode = 1; isVideo = true; break;
+                    case "2": colorMode = 0; isVideo = true; break;
+                    case "3": colorMode = 2; isVideo = true; break;
+                    case "4": colorMode = 1; isVideo = false; break;
+                    case "5": colorMode = 0; isVideo = false; break;
+                    case "6": colorMode = 2; isVideo = false; break;
+                    default:
+                        Console.WriteLine("Неверный выбор!");
+                        Thread.Sleep(1000);
+                        continue;
+                }
+
+                Console.Write("\nВведите путь к файлу (или перетащите): ");
+                string path = Console.ReadLine();
+
+                if (!string.IsNullOrEmpty(path))
+                {
+                    path = path.Trim('"', ' ', '\'', '[', ']', '(', ')');
+                }
+
+                if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                {
+                    Console.WriteLine("Файл не найден!");
+                    Thread.Sleep(1500);
+                    continue;
+                }
+
+                if (isVideo)
+                    PlayVideo(path);
+                else
+                    ShowPhoto(path);
+
+                CleanupTemp();
             }
+        }
 
-            Console.Write("\nВведите путь к файлу: ");
-            string path = args.Length > 0 ? args[0] : Console.ReadLine();
-
-            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+        static void MaximizeConsole()
+        {
+            try
             {
-                Console.WriteLine("Файл не найден!");
-                Console.ReadKey();
-                return;
+                int width = Console.LargestWindowWidth;
+                int height = Console.LargestWindowHeight;
+                Console.SetWindowSize(width, height);
+                Console.SetBufferSize(width, height);
             }
+            catch
+            {
+                try { Console.SetWindowSize(160, 80); Console.SetBufferSize(160, 80); } catch { }
+            }
+        }
 
-            if (isVideo)
-                PlayVideo(path);
-            else
-                ShowPhoto(path);
+        static void CleanupTemp()
+        {
+            try
+            {
+                string tempPath = Path.GetTempPath();
+                string[] tempFiles = Directory.GetFiles(tempPath, "*_temp_*.wav");
+                foreach (string file in tempFiles)
+                {
+                    try
+                    {
+                        if (File.GetLastWriteTime(file) < DateTime.Now.AddHours(-1))
+                            File.Delete(file);
+                    }
+                    catch { }
+                }
+            }
+            catch { }
         }
 
         static void ShowPhoto(string path)
@@ -102,31 +151,41 @@ namespace ASCIIVideoPlayer
             {
                 using (Bitmap img = new Bitmap(path))
                 {
-                    int consoleW = Math.Max(Console.WindowWidth, MinWidth);
-                    int consoleH = Console.WindowHeight;
+                    int consoleW = Console.WindowWidth;
+                    int consoleH = Console.WindowHeight - 3;
                     int targetW = consoleW;
                     int targetH = (int)(consoleH / AspectRatio);
 
                     Console.WriteLine($"Изображение: {img.Width}x{img.Height}");
                     Console.WriteLine($"Режим: {(colorMode == 0 ? "Серый" : colorMode == 1 ? "Цветной" : "Цветной улучшенный")}");
                     Console.WriteLine("Нажмите любую клавишу для отображения. ESC для выхода.\n");
-                    Console.ReadKey(true);
+
+                    ConsoleKeyInfo key = Console.ReadKey(true);
+                    if (key.Key == ConsoleKey.Escape) return;
+
                     Console.Clear();
 
-                    using (Bitmap enhanced = EnhanceImage(img))
-                    {
-                        CHAR_INFO[] buffer = ConvertToBuffer(enhanced, targetW, targetH, consoleW, consoleH);
-                        WriteBuffer(buffer, consoleW, consoleH);
-                    }
+                    Bitmap processedImg = (colorMode == 2) ? EnhanceImage(img) : img;
+                    CHAR_INFO[] buffer = ConvertToBuffer(processedImg, targetW, targetH, consoleW, consoleH);
+                    if (processedImg != img) processedImg.Dispose();
 
-                    Console.WriteLine("\n\nНажмите ESC для выхода...");
-                    while (Console.ReadKey(true).Key != ConsoleKey.Escape) { }
+                    WriteBuffer(buffer, consoleW, consoleH);
+
+                    Console.SetCursorPosition(0, consoleH);
+                    Console.WriteLine("ESC - выход | M - меню");
+
+                    while (true)
+                    {
+                        key = Console.ReadKey(true);
+                        if (key.Key == ConsoleKey.Escape || key.Key == ConsoleKey.M) break;
+                    }
                 }
             }
             catch (Exception ex)
             {
                 Console.Clear();
                 Console.WriteLine($"Ошибка загрузки изображения: {ex.Message}");
+                Thread.Sleep(2000);
             }
             finally
             {
@@ -136,27 +195,55 @@ namespace ASCIIVideoPlayer
 
         static Bitmap EnhanceImage(Bitmap original)
         {
-            Bitmap enhanced = new Bitmap(original.Width, original.Height);
+            int width = original.Width;
+            int height = original.Height;
+            Bitmap enhanced = new Bitmap(width, height, PixelFormat.Format24bppRgb);
 
-            using (Graphics g = Graphics.FromImage(enhanced))
+            BitmapData srcData = original.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.ReadOnly, original.PixelFormat);
+            BitmapData dstData = enhanced.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, PixelFormat.Format24bppRgb);
+
+            int srcDepth = Image.GetPixelFormatSize(original.PixelFormat) / 8;
+            int srcBytes = Math.Abs(srcData.Stride) * height;
+            int dstBytes = Math.Abs(dstData.Stride) * height;
+
+            byte[] srcRgb = new byte[srcBytes];
+            byte[] dstRgb = new byte[dstBytes];
+
+            Marshal.Copy(srcData.Scan0, srcRgb, 0, srcBytes);
+
+            for (int y = 0; y < height; y++)
             {
-                ImageAttributes attr = new ImageAttributes();
+                int srcLine = y * srcData.Stride;
+                int dstLine = y * dstData.Stride;
 
-                ColorMatrix matrix = new ColorMatrix(new float[][]
+                for (int x = 0; x < width; x++)
                 {
-                    new float[] {1.15f, 0, 0, 0, 0},
-                    new float[] {0, 1.15f, 0, 0, 0},
-                    new float[] {0, 0, 1.15f, 0, 0},
-                    new float[] {0, 0, 0, 1, 0},
-                    new float[] {0.05f, 0.05f, 0.05f, 0, 1}
-                });
+                    int srcIdx = srcLine + x * srcDepth;
+                    int dstIdx = dstLine + x * 3;
 
-                attr.SetColorMatrix(matrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
-                attr.SetGamma(0.85f, ColorAdjustType.Bitmap);
+                    byte b = srcRgb[srcIdx];
+                    byte g = srcRgb[srcIdx + 1];
+                    byte r = srcRgb[srcIdx + 2];
 
-                g.DrawImage(original, new Rectangle(0, 0, original.Width, original.Height),
-                    0, 0, original.Width, original.Height, GraphicsUnit.Pixel, attr);
+                    int newR = Math.Min(255, (r * 115 / 100) + 13);
+                    int newG = Math.Min(255, (g * 115 / 100) + 13);
+                    int newB = Math.Min(255, (b * 115 / 100) + 13);
+
+                    double gamma = 0.85;
+                    newR = (int)(255 * Math.Pow(newR / 255.0, gamma));
+                    newG = (int)(255 * Math.Pow(newG / 255.0, gamma));
+                    newB = (int)(255 * Math.Pow(newB / 255.0, gamma));
+
+                    dstRgb[dstIdx] = (byte)newB;
+                    dstRgb[dstIdx + 1] = (byte)newG;
+                    dstRgb[dstIdx + 2] = (byte)newR;
+                }
             }
+
+            Marshal.Copy(dstRgb, 0, dstData.Scan0, dstBytes);
+
+            original.UnlockBits(srcData);
+            enhanced.UnlockBits(dstData);
 
             return enhanced;
         }
@@ -173,7 +260,10 @@ namespace ASCIIVideoPlayer
                     Console.WriteLine($"Видео: {reader.Width}x{reader.Height}, FPS: {reader.FrameRate.Value:F1}");
                     Console.WriteLine($"Режим: {(colorMode == 0 ? "Серый" : colorMode == 1 ? "Цветной" : "Цветной улучшенный")}");
                     Console.WriteLine("Нажмите любую клавишу для начала. ESC для выхода.");
-                    Console.ReadKey(true);
+
+                    ConsoleKeyInfo key = Console.ReadKey(true);
+                    if (key.Key == ConsoleKey.Escape) return;
+
                     Console.Clear();
 
                     double fps = reader.FrameRate.Value;
@@ -184,7 +274,7 @@ namespace ASCIIVideoPlayer
                     Thread.Sleep(500);
 
                     long frameNum = 0;
-                    int consoleW = Math.Max(Console.WindowWidth, MinWidth);
+                    int consoleW = Console.WindowWidth;
                     int consoleH = Console.WindowHeight;
                     int targetW = consoleW;
                     int targetH = (int)(consoleH / AspectRatio);
@@ -197,11 +287,11 @@ namespace ASCIIVideoPlayer
                         {
                             if (frame == null) break;
 
-                            using (Bitmap enhanced = EnhanceImage(frame))
-                            {
-                                CHAR_INFO[] buffer = ConvertToBuffer(enhanced, targetW, targetH, consoleW, consoleH);
-                                WriteBuffer(buffer, consoleW, consoleH);
-                            }
+                            Bitmap processedFrame = (colorMode == 2) ? EnhanceImage(frame) : frame;
+                            CHAR_INFO[] buffer = ConvertToBuffer(processedFrame, targetW, targetH, consoleW, consoleH);
+                            if (processedFrame != frame) processedFrame.Dispose();
+
+                            WriteBuffer(buffer, consoleW, consoleH);
                             frameNum++;
 
                             SyncWithAudio(frameNum, fps, reader, ref frameNum);
@@ -217,22 +307,21 @@ namespace ASCIIVideoPlayer
 
                     StopAudio();
                     Console.Clear();
-                    Console.WriteLine("\n\nВоспроизведение завершено!");
+                    Console.WriteLine("\n\nВоспроизведение завершено! Нажмите любую клавишу...");
+                    Console.ReadKey(true);
                 }
                 catch (Exception ex)
                 {
                     Console.Clear();
                     Console.WriteLine($"Ошибка: {ex.Message}\nStack trace: {ex.StackTrace}");
                     StopAudio();
+                    Thread.Sleep(3000);
                 }
                 finally
                 {
                     Console.CursorVisible = true;
                 }
             }
-
-            Console.WriteLine("Нажмите любую клавишу для выхода...");
-            Console.ReadKey(true);
         }
 
         static void SyncWithAudio(long frameNum, double fps, VideoFileReader reader, ref long frameNumber)
@@ -371,38 +460,40 @@ namespace ASCIIVideoPlayer
 
         static CHAR_INFO[] ConvertToBuffer(Bitmap img, int w, int h, int consoleW, int consoleH)
         {
-            CHAR_INFO[] buffer = new CHAR_INFO[consoleW * consoleH];
+            int bufferSize = consoleW * consoleH;
+            CHAR_INFO[] buffer = new CHAR_INFO[bufferSize];
 
-            using (Bitmap resized = new Bitmap(w, h))
+            using (Bitmap resized = new Bitmap(w, h, PixelFormat.Format24bppRgb))
             {
                 using (Graphics g = Graphics.FromImage(resized))
                 {
-                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.CompositingQuality = CompositingQuality.HighSpeed;
+                    g.InterpolationMode = InterpolationMode.Bilinear;
+                    g.SmoothingMode = SmoothingMode.HighSpeed;
+                    g.PixelOffsetMode = PixelOffsetMode.HighSpeed;
                     g.DrawImage(img, 0, 0, w, h);
                 }
 
-                Rectangle rect = new Rectangle(0, 0, w, h);
-                BitmapData data = resized.LockBits(rect, ImageLockMode.ReadOnly, resized.PixelFormat);
+                BitmapData data = resized.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+                int stride = data.Stride;
+                byte[] rgb = new byte[Math.Abs(stride) * h];
+                Marshal.Copy(data.Scan0, rgb, 0, rgb.Length);
+                resized.UnlockBits(data);
 
-                int bytes = Math.Abs(data.Stride) * h;
-                byte[] rgb = new byte[bytes];
-                Marshal.Copy(data.Scan0, rgb, 0, bytes);
-
-                int depth = Image.GetPixelFormatSize(resized.PixelFormat) / 8;
                 int maxChar = asciiChars.Length - 1;
                 int bufIdx = 0;
 
-                for (int y = 0; y < h && y < consoleH; y++)
+                for (int y = 0; y < h; y++)
                 {
-                    int lineStart = y * data.Stride;
-                    for (int x = 0; x < w && x < consoleW; x++)
+                    int lineStart = y * stride;
+                    for (int x = 0; x < w; x++)
                     {
-                        int idx = lineStart + x * depth;
+                        int idx = lineStart + x * 3;
                         byte b = rgb[idx];
                         byte g = rgb[idx + 1];
                         byte r = rgb[idx + 2];
 
-                        int brightness = (int)(r * 0.299 + g * 0.587 + b * 0.114);
+                        int brightness = (r * 77 + g * 150 + b * 29) >> 8;
 
                         buffer[bufIdx].UnicodeChar = asciiChars[brightness * maxChar / 255];
 
@@ -422,25 +513,18 @@ namespace ASCIIVideoPlayer
                         bufIdx++;
                     }
 
-                    for (int x = w; x < consoleW; x++)
+                    for (int x = w; x < consoleW; x++, bufIdx++)
                     {
                         buffer[bufIdx].UnicodeChar = ' ';
-                        buffer[bufIdx].Attributes = 7;
-                        bufIdx++;
+                        buffer[bufIdx].Attributes = 0;
                     }
                 }
 
-                for (int y = h; y < consoleH; y++)
+                for (; bufIdx < bufferSize; bufIdx++)
                 {
-                    for (int x = 0; x < consoleW; x++)
-                    {
-                        buffer[bufIdx].UnicodeChar = ' ';
-                        buffer[bufIdx].Attributes = 7;
-                        bufIdx++;
-                    }
+                    buffer[bufIdx].UnicodeChar = ' ';
+                    buffer[bufIdx].Attributes = 0;
                 }
-
-                resized.UnlockBits(data);
             }
 
             return buffer;
@@ -481,7 +565,7 @@ namespace ASCIIVideoPlayer
             int min = Math.Min(r, Math.Min(g, b));
             int delta = max - min;
 
-            if (delta < 25)
+            if (delta < 30)
             {
                 if (brightness < 32) return 0x00;
                 if (brightness < 80) return 0x08;
@@ -490,49 +574,69 @@ namespace ASCIIVideoPlayer
             }
 
             short color = 0;
+            int secondMax = 0;
 
-            if (r > g + 20 && r > b + 20)
+            if (r >= g && r >= b)
             {
-                color = 0x04;
-                if (r > 180 || brightness > 140) color |= 0x08;
+                secondMax = Math.Max(g, b);
+                if (r > secondMax + 40 && secondMax < 120)
+                {
+                    color = 0x04;
+                    if (r > 180 || brightness > 140) color |= 0x08;
+                    return color;
+                }
             }
-            else if (g > r + 20 && g > b + 20)
+            else if (g >= r && g >= b)
             {
-                color = 0x02;
-                if (g > 180 || brightness > 140) color |= 0x08;
+                secondMax = Math.Max(r, b);
+                if (g > secondMax + 35)
+                {
+                    color = 0x02;
+                    if (g > 180 || brightness > 140) color |= 0x08;
+                    return color;
+                }
             }
-            else if (b > r + 20 && b > g + 20)
+            else if (b >= r && b >= g)
             {
-                color = 0x01;
-                if (b > 180 || brightness > 140) color |= 0x08;
+                secondMax = Math.Max(r, g);
+                if (b > secondMax + 35)
+                {
+                    color = 0x01;
+                    if (b > 180 || brightness > 140) color |= 0x08;
+                    return color;
+                }
             }
-            else if (r > 100 && g > 100 && b < 80)
+
+            if (r > 110 && g > 110 && b < 90)
             {
                 color = 0x06;
-                if (r > 180 || g > 180) color |= 0x08;
+                if ((r > 180 || g > 180) && brightness > 130) color |= 0x08;
+                return color;
             }
-            else if (r > 100 && b > 100 && g < 80)
+
+            if (r > 110 && b > 110 && g < 90)
             {
                 color = 0x05;
-                if (r > 180 || b > 180) color |= 0x08;
+                if ((r > 180 || b > 180) && brightness > 130) color |= 0x08;
+                return color;
             }
-            else if (g > 100 && b > 100 && r < 80)
+
+            if (g > 110 && b > 110 && r < 90)
             {
                 color = 0x03;
-                if (g > 180 || b > 180) color |= 0x08;
+                if ((g > 180 || b > 180) && brightness > 130) color |= 0x08;
+                return color;
             }
-            else
-            {
-                bool rHigh = r > 100;
-                bool gHigh = g > 100;
-                bool bHigh = b > 100;
 
-                if (rHigh) color |= 0x04;
-                if (gHigh) color |= 0x02;
-                if (bHigh) color |= 0x01;
+            bool rHigh = r > 110;
+            bool gHigh = g > 110;
+            bool bHigh = b > 110;
 
-                if (brightness > 150) color |= 0x08;
-            }
+            if (rHigh) color |= 0x04;
+            if (gHigh) color |= 0x02;
+            if (bHigh) color |= 0x01;
+
+            if (brightness > 160) color |= 0x08;
 
             return color;
         }
